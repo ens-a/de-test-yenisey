@@ -1,0 +1,79 @@
+version: '3'
+services:
+
+  clickhouse:
+    build:
+      context: ./clickhouse/
+      dockerfile: Dockerfile
+    container_name: clickhouse
+    restart: always
+    environment:
+      MYSQL_USER: ${MYSQL_CH_USER}
+      MYSQL_PASSWORD: ${MYSQL_CH_PASSWORD}
+    depends_on:
+      - init-kafka
+      - mysql-db
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    ports:
+      - 8123:8123
+
+  mysql-db:
+    build:
+      context: ./mysql-db
+      dockerfile: Dockerfile
+    container_name: 'mysql-db'    
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # MYSQL_USER: ${MYSQL_CH_USER}
+      # MYSQL_PASSWORD: ${MYSQL_CH_PASSWORD}
+    ports:
+      - '3306:3306'
+    volumes: 
+      - ./mysql-db/data:/var/lib/mysql-files/
+    command: mysqld --server-id=1 --log-bin='mysql-bin.log' --enforce-gtid-consistency='ON' --gtid-mode='ON' --default_authentication_plugin='mysql_native_password' 
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper   
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  broker:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: broker
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    expose:
+      - '29092'
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092,PLAINTEXT_INTERNAL://broker:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes: 
+      - ./broker/data:/home/data
+
+  init-kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    depends_on:
+      - broker
+    container_name: init-kafka
+    volumes: 
+      - ./broker/data:/home/data
+    entrypoint: [ '/bin/sh', '-c' ]
+    command:  
+    - |
+      kafka-topics --bootstrap-server broker:29092 --create --topic clicks
+      cat /home/data/data_clicks | kafka-console-producer  --bootstrap-server broker:29092 --topic clicks
